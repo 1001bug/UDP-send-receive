@@ -1,5 +1,5 @@
 # UDP-send-recive
-This id NetBeans IDE 8.2 project\
+This is NetBeans IDE 8.2 project\
 \
 But it can be compilled under Linux and Windows as is by:\
 gcc -o sendmsg_recvmsg mail.c\
