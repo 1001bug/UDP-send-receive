@@ -39,12 +39,13 @@
 
 #define PORT "11000"
 #define USEC 1000000
+#define BUF_LEN 50
 /*
  * 
  */
 
 void sender(struct addrinfo *res_local, struct addrinfo *res_remote, unsigned int usecs);
-void reciver(struct addrinfo *res_local, struct addrinfo *res_remote);
+void receiver(struct addrinfo *res_local);
 
 int main(int argc, char** argv) {
     /*
@@ -54,78 +55,90 @@ int main(int argc, char** argv) {
      * 
      * https://www.kernel.org/doc/Documentation/networking/timestamping.txt
      * http://man7.org/linux/man-pages/man3/cmsg.3.html
-     * 
      * http://man7.org/linux/man-pages/man3/getaddrinfo.3.html
-     * getaddrinfo(const char *node, const char *service,const struct addrinfo *hints,struct addrinfo **res);
-     * AI_PASSIVE flag is specified in hints.ai_flags and node is NULL -  для ,bind на любой адрес (слушать)
-     * типа взводим флаг hints_local.ai_flags=AI_PASSIVE, а вместо адреса интерфейса const char *node передаем NULL
-     * и это должно годится для "local bind"
      * 
-     * const char *service -  это кстати порт
-     * 
-     
      
      */
 
     struct addrinfo hints_local, hints_remote, *res_local, *res_remote;
-    char *port = PORT;
-    //char *source_ip = "0.0.0.0";
-    char *source_ip = NULL;
-    char *dst_ip = "0.0.0.0";
-    unsigned int usecs = USEC;
+    char *local_ip = NULL;
+    char *remote_port = NULL;
+    char *remote_ip = NULL;
+    char *local_port = NULL;
+    unsigned int delay = USEC;
 
     memset(&hints_local, 0, sizeof hints_local);
     memset(&hints_remote, 0, sizeof hints_remote);
 
+    //IPv4/IPv6 agnostic
     hints_local.ai_family = AF_UNSPEC;
     hints_remote.ai_family = AF_UNSPEC;
+    
+    //UDP socket
     hints_local.ai_socktype = SOCK_DGRAM;
     hints_remote.ai_socktype = SOCK_DGRAM;
     
     
 
 
-    //SENDER
-    if (argc > 1) {
-        dst_ip=argv[1];
+    
+    if (argc > 1) {//sender
+        
+        remote_ip = argv[1];
+        remote_port = PORT; //remote server port
+        local_port = "0"; //sender local port "0" - any free port or use custom and then do bind
+        local_ip = NULL;//NULL - any interface (may be kernel will choose by target ip)
         
         int status;
-        if ((status = getaddrinfo( source_ip, "0", &hints_local, &res_local)) != 0) {
-            //if(errno!=0){printf("getaddrinfo local fails\n");perror("getaddrinfo local");
-            fprintf(stderr, "getaddrinfo source_ip error: %s\n", gai_strerror(status));
-            exit(EXIT_FAILURE);
-        }
-
-
-        if ((status = getaddrinfo(dst_ip, port, &hints_remote, &res_remote)) != 0) {
-            fprintf(stderr, "getaddrinfo remote_ip error: %s\n", gai_strerror(status));
-            exit(EXIT_FAILURE);
-        }
-        sender(res_local,res_remote,usecs);
         
-    } else {
-
-
-        //REPLYER
-        int status;
-        if ((status = getaddrinfo(source_ip, port, &hints_local, &res_local)) != 0) {
-            fprintf(stderr, "getaddrinfo source_ip error: %s\n", gai_strerror(status));
+        if ((status = getaddrinfo( local_ip, local_port, &hints_local, &res_local)) != 0) {
+            fprintf(stderr, "sender: local_ip '%s' local_port '%s' getaddrinfo error: %s\n",local_ip, "0", gai_strerror(status));
             exit(EXIT_FAILURE);
         }
-        reciver(res_local,res_remote);
+
+
+        if ((status = getaddrinfo(remote_ip, remote_port, &hints_remote, &res_remote)) != 0) {
+            fprintf(stderr, "sender: remote_ip '%s' remote_port '%s' getaddrinfo error: %s\n",remote_ip, remote_port, gai_strerror(status));
+            exit(EXIT_FAILURE);
+        }
+        fprintf(stderr,"sender:\nlocal_ip '%s' local_port '%s'\nremote_ip '%s' remote_port '%s'\n",local_ip?local_ip:"any", local_port,remote_ip, remote_port);
+        sender(res_local,res_remote,delay);
+        
+    } else {//receiver
+        
+        local_ip = NULL; //NULL - any interface  - 0.0.0.0 
+        local_port = PORT; //local binding port
+        
+        hints_local.ai_flags = AI_PASSIVE; //ask kernel fillin local_ip
+        
+        int status;
+        if ((status = getaddrinfo(local_ip, local_port, &hints_local, &res_local)) != 0) {
+            fprintf(stderr, "receiver: local_ip '%s' local_port '%s' getaddrinfo error: %s\n",local_ip, local_port, gai_strerror(status));
+            exit(EXIT_FAILURE);
+        }
+        fprintf(stderr,"receiver: local_ip '%s' local_port '%s'\n",local_ip?local_ip:"any", local_port);
+        receiver(res_local);
 
     }
 
-        return (EXIT_SUCCESS);
+    fprintf(stderr,"Finish!\n");
+    
+    freeaddrinfo(res_local);
+    freeaddrinfo(res_remote);
+    
+    return (EXIT_SUCCESS);
     }
 
     void sender(struct addrinfo *res_local, struct addrinfo *res_remote, unsigned int usecs) {
 
         int sock;
-        unsigned char buf[50] = {0};
+        unsigned char buf[BUF_LEN] = {0};
 
         sock = socket(res_remote->ai_family, res_remote->ai_socktype, res_remote->ai_protocol);
+        
+        //sockopt REUSEADDR
 /*
+ //need in case of custom outgoing port
         if (bind(sock, res_local->ai_addr, res_local->ai_addrlen) < 0) {
             perror("bind local addr");
             exit(EXIT_FAILURE);
@@ -140,37 +153,20 @@ int main(int argc, char** argv) {
         struct msghdr msg;
         //res_remote->
 
-        switch (res_remote->ai_family) {
-            case AF_INET:
-                msg.msg_name = (struct sockaddr_in *) res_remote->ai_addr;
-                msg.msg_namelen = sizeof (struct sockaddr_in);
-                break;
-            case AF_INET6:
-                msg.msg_name = (struct sockaddr_in6 *) res_remote->ai_addr;
-                msg.msg_namelen = sizeof (struct sockaddr_in6);
 
-                break;
-        }
-
-
+        msg.msg_name = (void *) res_remote->ai_addr;
+        msg.msg_namelen = res_remote->ai_addrlen;
+        
         msg.msg_iov = iov;
         msg.msg_iovlen = 1;
 
-/*
-        struct cmsghdr cmsg = CMSG_FIRSTHDR(&msg);
-    cmsg->cmsg_level = SOL_SOCKET;
-    cmsg->cmsg_type = SO_TIMESTAMPING;
-    cmsg->cmsg_len = CMSG_LEN(sizeof (__u32));
-    *((__u32 *) CMSG_DATA(cmsg)) = SOF_TIMESTAMPING_TX_SCHED |
-            SOF_TIMESTAMPING_TX_SOFTWARE |
-            SOF_TIMESTAMPING_TX_ACK;
-  */                
+                
     while (1) {
         errno = 0;
         int k = sendmsg(sock, &msg, 0);
         if (k < 1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                perror("sendmsg");
+                perror("sendmsg EAGAIN?");
             } else {
                 perror("sendmsg");
                 return;
@@ -180,15 +176,18 @@ int main(int argc, char** argv) {
         usleep(usecs);
     }
 
+        close(sock);
 
     }
 
-    void reciver(struct addrinfo *res_local, struct addrinfo * res_remote) {
+    void receiver(struct addrinfo *res_local) {
         int sock;
-        unsigned char buf[50] = {0};
+        unsigned char buf[BUF_LEN] = {0};
 
         sock = socket(res_local->ai_family, res_local->ai_socktype, res_local->ai_protocol);
 
+        //sockopt REUSEADDR
+        
         if (bind(sock, res_local->ai_addr, res_local->ai_addrlen) < 0) {
             perror("bind local addr");
             exit(EXIT_FAILURE);
@@ -196,18 +195,14 @@ int main(int argc, char** argv) {
 
         struct msghdr msg;
         struct iovec iov[1];
-        switch (res_local->ai_family) {
-            case AF_INET:
-                msg.msg_name = (struct sockaddr_in *) res_local->ai_addr;
-                msg.msg_namelen = sizeof (struct sockaddr_in);
-                break;
-            case AF_INET6:
-                msg.msg_name = (struct sockaddr_in6 *) res_local->ai_addr;
-                msg.msg_namelen = sizeof (struct sockaddr_in6);
-
-                break;
-        }
-        iov[0] .iov_base = (void*) buf;
+        
+        msg.msg_name = (void *) res_local->ai_addr;
+        msg.msg_namelen = res_local->ai_addrlen;
+        
+        //msg.msg_name = (struct sockaddr_in6 *) res_local->ai_addr;
+        //msg.msg_namelen = sizeof (struct sockaddr_in6);
+        
+        iov[0] .iov_base = (void *) buf;
         iov[0] .iov_len = sizeof (buf);
 
         msg.msg_iov = iov;
@@ -227,22 +222,21 @@ int main(int argc, char** argv) {
 
 
             {
-
+                //Old style
                 char *s = inet_ntoa(((struct sockaddr_in *) msg.msg_name)->sin_addr);
                 printf("RCV FROM IP address: %s\n", s);
                 
-                
+                //Modern style (show names: flag=0, show disgits: flag=NI_NUMERICHOST | NI_NUMERICSERV)
                 char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
                 if (getnameinfo(((struct sockaddr *) msg.msg_name), msg.msg_namelen, hbuf, sizeof(hbuf), sbuf,
                        sizeof(sbuf), 
-                        //NI_NUMERICHOST | NI_NUMERICSERV
-                        0
+                        NI_NUMERICHOST | NI_NUMERICSERV
+                        //0
                         ) == 0)
-               printf("host=%s, serv=%s\n", hbuf, sbuf);
-                // */
-                
+               printf("host=%s, serv/port=%s\n", hbuf, sbuf);
             }
 
         }
+        close(sock);
     }
 
