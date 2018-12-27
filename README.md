@@ -2,7 +2,7 @@
 This is NetBeans IDE 8.2 project\
 \
 But it can be compilled under Linux and Windows as is by:\
-gcc -o sendmsg_recvmsg mail.c\
+gcc -o sendmsg_recvmsg main.c\
 \
 \
 Under Windows you need Cygwin or MSYS2 for compability with POSIX.\
